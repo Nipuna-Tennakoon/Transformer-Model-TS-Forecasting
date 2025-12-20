@@ -52,7 +52,6 @@ pip install -r requirements.txt
 ├── src/                                           # Source code
 │   ├── main.ipynb                                # Jupyter notebook for training and forecasting
 │   └── main.py                                   # Python script version
-├── images/                                        # Directory for saving plots and visualizations
 ├── requirements.txt                               # Python dependencies
 └── README.md                                      # Project documentation
 ```
@@ -157,13 +156,6 @@ The trained model is validated on additional temperature features:
    - Test loss: ~0.00007
 
 This demonstrates the model's ability to generalize across related temperature measurements in the same IoT system.
-
-## 📊 Results Visualization
-
-The notebook generates visualizations comparing:
-- Actual vs Forecasted temperature sequences
-- Zoomed-in views for detailed analysis
-- Training and validation performance
 
 ## 💾 Model Persistence
 
