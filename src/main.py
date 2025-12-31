@@ -187,6 +187,11 @@ def train(train_data):
     total_loss = 0.0
     start_time = time.time()
 
+    # Initialize metrics accumulators
+    mse_sum = 0.0
+    mae_sum = 0.0
+    batch_count = 0
+
     for batch, i in enumerate(range(0, len(train_data) - 1, batch_size)):
         data, targets = get_batch(train_data, i,batch_size)
         optimizer.zero_grad()
@@ -195,6 +200,16 @@ def train(train_data):
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 0.7)
         optimizer.step()
+
+        # Calculate metrics
+        with torch.no_grad():
+            mse_batch = loss.item()
+            rmse_batch = np.sqrt(mse_batch)
+            mae_batch = torch.mean(torch.abs(output - targets)).item()
+
+            mse_sum += mse_batch
+            mae_sum += mae_batch
+            batch_count += 1
 
         total_loss += loss.item()
         log_interval = int(len(train_data) / batch_size / 5)
@@ -210,18 +225,63 @@ def train(train_data):
             total_loss = 0
             start_time = time.time()
 
+    # Calculate average metrics for the epoch
+    avg_mse = mse_sum / batch_count
+    avg_rmse = np.sqrt(avg_mse)
+    avg_mae = mae_sum / batch_count
+
+    # Evaluate validation metrics
+    val_mse, val_rmse, val_mae = evaluate(model, val_data)
+
+    # Store metrics
+    train_mse_history.append(avg_mse)
+    train_rmse_history.append(avg_rmse)
+    train_mae_history.append(avg_mae)
+    val_mse_history.append(val_mse)
+    val_rmse_history.append(val_rmse)
+    val_mae_history.append(val_mae)
+
+    # wandb.log({
+    #     "MSE training loss": avg_mse,
+    #     "RMSE training loss": avg_rmse,
+    #     "MAE training loss": avg_mae,
+    #     "MSE validation loss": val_mse,
+    #     "RMSE validation loss": val_rmse,
+    #     "MAE validation loss": val_mae
+    # })
+
+    return avg_mse, avg_rmse, avg_mae, val_mse, val_rmse, val_mae
+
 
 
 def evaluate(eval_model, data_source):
     eval_model.eval()
-    total_loss = 0.0
+    mse_sum = 0.0
+    mae_sum = 0.0
+    total_samples = 0
     eval_batch_size = 1000
     with torch.no_grad():
         for i in range(0, len(data_source) - 1, eval_batch_size):
             data, targets = get_batch(data_source, i, eval_batch_size)
             output = eval_model(data)
-            total_loss += len(data[0])* criterion(output, targets).cpu().item()
-    return total_loss / len(data_source)
+
+            # Calculate MSE
+            mse_batch = criterion(output, targets).cpu().item()
+            batch_size = len(data[0])
+
+            # Calculate MAE
+            mae_batch = torch.mean(torch.abs(output - targets)).cpu().item()
+
+            mse_sum += mse_batch * batch_size
+            mae_sum += mae_batch * batch_size
+            total_samples += batch_size
+
+    # Calculate average metrics
+    avg_mse = mse_sum / total_samples
+    avg_rmse = np.sqrt(avg_mse)
+    avg_mae = mae_sum / total_samples
+
+    return avg_mse, avg_rmse, avg_mae
 
 
 
@@ -281,6 +341,14 @@ epochs = 200
 optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
 scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1.0, gamma=0.95)
 
+# Initialize metric history lists to track training and validation metrics
+train_mse_history = []
+train_rmse_history = []
+train_mae_history = []
+val_mse_history = []
+val_rmse_history = []
+val_mae_history = []
+
 
 
 
@@ -288,15 +356,25 @@ for epoch in range(1, epochs + 1):
     epoch_start_time = time.time()
     train(train_data)
 
+    # Metrics are already calculated and stored in train() function
     if(epoch % epochs == 0): # Valid model after last training epoch
-        val_loss = evaluate(model, val_data)
         print("-" * 80)
-        print("| end of epoch {:3d} | time: {:5.2f}s | valid loss: {:5.7f}".format(epoch, (time.time() - epoch_start_time), val_loss))
+        print("| end of epoch {:3d} | time: {:5.2f}s".format(epoch, (time.time() - epoch_start_time)))
+        if len(train_mse_history) > 0:
+            print("| Train - MSE: {:5.7f} | RMSE: {:5.7f} | MAE: {:5.7f}".format(
+                train_mse_history[-1], train_rmse_history[-1], train_mae_history[-1]))
+            print("| Valid - MSE: {:5.7f} | RMSE: {:5.7f} | MAE: {:5.7f}".format(
+                val_mse_history[-1], val_rmse_history[-1], val_mae_history[-1]))
         print("-" * 80)
 
     else:
         print("-" * 80)
         print("| end of epoch {:3d} | time: {:5.2f}s".format(epoch, (time.time() - epoch_start_time)))
+        if len(train_mse_history) > 0:
+            print("| Train - MSE: {:5.7f} | RMSE: {:5.7f} | MAE: {:5.7f}".format(
+                train_mse_history[-1], train_rmse_history[-1], train_mae_history[-1]))
+            print("| Valid - MSE: {:5.7f} | RMSE: {:5.7f} | MAE: {:5.7f}".format(
+                val_mse_history[-1], val_rmse_history[-1], val_mae_history[-1]))
         print("-" * 80)
 
     scheduler.step()
@@ -313,6 +391,53 @@ plt.title("Actual vs Forecast")
 plt.legend(["Actual", "Forecast"])
 plt.xlabel("Time Steps")
 plt.show()
+
+
+# Plot training and validation loss metrics
+if len(train_mse_history) > 0:
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+
+    epochs_range = range(1, len(train_mse_history) + 1)
+
+    # Plot MSE
+    axes[0].plot(epochs_range, train_mse_history, label='Train MSE', color='blue', linewidth=2)
+    axes[0].plot(epochs_range, val_mse_history, label='Validation MSE', color='red', linewidth=2)
+    axes[0].set_xlabel('Epoch', fontsize=12)
+    axes[0].set_ylabel('MSE Loss', fontsize=12)
+    axes[0].set_title('Mean Squared Error (MSE)', fontsize=14, fontweight='bold')
+    axes[0].legend(fontsize=11)
+    axes[0].grid(True, alpha=0.3)
+
+    # Plot RMSE
+    axes[1].plot(epochs_range, train_rmse_history, label='Train RMSE', color='blue', linewidth=2)
+    axes[1].plot(epochs_range, val_rmse_history, label='Validation RMSE', color='red', linewidth=2)
+    axes[1].set_xlabel('Epoch', fontsize=12)
+    axes[1].set_ylabel('RMSE Loss', fontsize=12)
+    axes[1].set_title('Root Mean Squared Error (RMSE)', fontsize=14, fontweight='bold')
+    axes[1].legend(fontsize=11)
+    axes[1].grid(True, alpha=0.3)
+
+    # Plot MAE
+    axes[2].plot(epochs_range, train_mae_history, label='Train MAE', color='blue', linewidth=2)
+    axes[2].plot(epochs_range, val_mae_history, label='Validation MAE', color='red', linewidth=2)
+    axes[2].set_xlabel('Epoch', fontsize=12)
+    axes[2].set_ylabel('MAE Loss', fontsize=12)
+    axes[2].set_title('Mean Absolute Error (MAE)', fontsize=14, fontweight='bold')
+    axes[2].legend(fontsize=11)
+    axes[2].grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    plt.show()
+
+    # Print final metrics
+    print("\n" + "="*80)
+    print("FINAL METRICS SUMMARY")
+    print("="*80)
+    print(f"Training   - MSE: {train_mse_history[-1]:.7f}, RMSE: {train_rmse_history[-1]:.7f}, MAE: {train_mae_history[-1]:.7f}")
+    print(f"Validation - MSE: {val_mse_history[-1]:.7f}, RMSE: {val_rmse_history[-1]:.7f}, MAE: {val_mae_history[-1]:.7f}")
+    print("="*80)
+else:
+    print("No training metrics available. Please run the training loop first.")
 
 
 
@@ -344,8 +469,8 @@ logreturn2 = np.diff(np.log(close2))
 
 
 train_data2, val_data2 = get_data(logreturn2, 0.6)
-test2_eval = evaluate(model_val, val_data2)
-print(f"boeing test loss: {test2_eval :.5f}")
+test2_eval_mse, test2_eval_rmse, test2_eval_mae = evaluate(model_val, val_data2)
+print(f"boeing test - MSE: {test2_eval_mse:.5f}, RMSE: {test2_eval_rmse:.5f}, MAE: {test2_eval_mae:.5f}")
 
 
 
@@ -366,8 +491,8 @@ logreturn3 = np.diff(np.log(close3))
 
 
 train_data3, val_data3 = get_data(logreturn3, 0.6)
-test3_eval = evaluate(model_val, val_data3)
-print(f'jp morgan test loss: {test3_eval :.5f}')
+test3_eval_mse, test3_eval_rmse, test3_eval_mae = evaluate(model_val, val_data3)
+print(f'jp morgan test - MSE: {test3_eval_mse:.5f}, RMSE: {test3_eval_rmse:.5f}, MAE: {test3_eval_mae:.5f}')
 
 
 test_result3, truth3 = forecast_seq(model_val, val_data3)
